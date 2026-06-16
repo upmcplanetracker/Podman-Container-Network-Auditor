@@ -68,7 +68,7 @@ The script requires standard Linux tools (awk, sed, printf) - available on almos
 ### Installation
 
     # Download the script
-    wget https://github.com/upmcplanetracker/Podman-Container-Network-Auditor/blob/main/audit_net.sh
+    wget https://github.com/upmcplanetracker/Podman-Container-Network-Auditor/blob/main/podman-network-audit.sh
     
     # Make it executable
     chmod +x podman-network-audit.sh
