@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Podman Dual-Stack & Network Audit Script v4
+# Podman Dual-Stack & Network Audit Script v5
 # Usage: ./podman-network-audit.sh [--summary] [container-name]
 
 # Color definitions - using brighter, more visible colors
@@ -13,8 +13,12 @@ CYAN='\033[1;96m'     # Bright Cyan
 GRAY='\033[0;90m'     # Dark Gray (for stopped containers)
 NC='\033[0m'          # No Color
 
-# Counters for summary
-declare -i dual_count=0 v6_count=0 v4_count=0 none_count=0 error_count=0
+# Initialize counters
+dual_count=0
+v6_count=0
+v4_count=0
+none_count=0
+error_count=0
 
 # Parse arguments
 SHOW_SUMMARY=false
@@ -108,7 +112,11 @@ if [ -z "$containers" ]; then
     exit 1
 fi
 
-echo "$containers" | while read -r cid name; do
+# Process containers without using a pipe (to preserve counter variables)
+while read -r cid name; do
+    # Skip empty lines
+    [ -z "$cid" ] && continue
+    
     # 1. Check if container is running
     is_running=$(podman inspect "$cid" --format '{{.State.Running}}' 2>/dev/null)
     if [ "$is_running" != "true" ]; then
@@ -322,7 +330,7 @@ echo "$containers" | while read -r cid name; do
             fi
         done
     fi
-done
+done <<< "$containers"
 
 # Show summary if requested
 if [ "$SHOW_SUMMARY" = true ]; then
