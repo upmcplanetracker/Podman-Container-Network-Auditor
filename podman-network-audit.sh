@@ -1,313 +1,80 @@
 #!/bin/bash
+set -u
 
-RED='\033[1;91m'      # Bright Red
-GREEN='\033[1;92m'    # Bright Green
-YELLOW='\033[1;93m'   # Bright Yellow
-BLUE='\033[1;94m'     # Bright Blue
-PURPLE='\033[1;95m'   # Bright Purple/Magenta
-CYAN='\033[1;96m'     # Bright Cyan
-GRAY='\033[0;90m'     # Dark Gray (for stopped containers)
-NC='\033[0m'          # No Color
+# Colors and configuration
+RED='\033[1;91m'; GREEN='\033[1;92m'; BLUE='\033[1;94m'; PURPLE='\033[1;95m'; GRAY='\033[0;90m'; NC='\033[0m'
 
-dual_count=0
-v6_count=0
-v4_count=0
-none_count=0
-error_count=0
-
+# Allow passing a specific container as an argument
+TARGET_CONTAINER=${1:-""}
 SHOW_SUMMARY=false
-FILTER_CONTAINER=""
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --summary) SHOW_SUMMARY=true ;;
-        *) FILTER_CONTAINER="$1" ;;
-    esac
-    shift
-done
+[[ "${1:-}" == "--summary" ]] && SHOW_SUMMARY=true
 
-hex_to_dec() {
-    echo $((16#$1))
-}
+if [ "$SHOW_SUMMARY" = true ]; then echo "Generating summary..."; fi
 
-hex_ip_to_dec() {
+# Counters
+dual_count=0; v6_count=0; v4_count=0; none_count=0; total_running=0
+
+decode_ip() {
     local hex=$1
     if [ ${#hex} -eq 8 ]; then
-        printf "%d.%d.%d.%d" \
-            $((16#${hex:6:2})) \
-            $((16#${hex:4:2})) \
-            $((16#${hex:2:2})) \
-            $((16#${hex:0:2}))
-    else
-        echo "::"
-    fi
+        printf "%d.%d.%d.%d" $((16#${hex:6:2})) $((16#${hex:4:2})) $((16#${hex:2:2})) $((16#${hex:0:2}))
+    else echo "::"; fi
 }
 
-wrap_text() {
-    local text="$1"
-    local width="$2"
-    local prefix="$3"
-    local first_line=true
-    
-    if [ ${#text} -le $width ]; then
-        echo "$text"
-        return
-    fi
-    
-    local words=($text)
-    local line=""
-    local result=""
-    
-    for word in "${words[@]}"; do
-        if [ ${#line} -eq 0 ]; then
-            line="$word"
-        elif [ $((${#line} + ${#word} + 1)) -le $width ]; then
-            line="$line $word"
-        else
-            if [ "$first_line" = true ]; then
-                result="$line"
-                first_line=false
-            else
-                result="$result\n$prefix$line"
-            fi
-            line="$word"
-        fi
-    done
-    
-    # Add the last line
-    if [ -n "$line" ]; then
-        if [ "$first_line" = true ]; then
-            result="$line"
-        else
-            result="$result\n$prefix$line"
-        fi
-    fi
-    
-    echo -e "$result"
-}
-
-printf "${GRAY}%-2s %-22s %-12s %-50s${NC}\n" " " "Container" "Network" "Listeners"
-printf "${GRAY}%s${NC}\n" "--------------------------------------------------------------------------------"
-
-if [ -n "$FILTER_CONTAINER" ]; then
-    containers=$(podman ps --filter "name=$FILTER_CONTAINER" --format "{{.ID}} {{.Names}}" 2>/dev/null)
-else
-    containers=$(podman ps --format "{{.ID}} {{.Names}}" 2>/dev/null)
+if [ "$SHOW_SUMMARY" = false ]; then
+    printf "${GRAY}%-22s %-12s %s${NC}\n" "Container" "Network" "Listeners (Host Mapping)"
+    printf "${GRAY}%s${NC}\n" "--------------------------------------------------------------------------------"
 fi
 
-if [ -z "$containers" ]; then
-    echo -e "${RED}No containers found${NC}"
-    exit 1
+# Logic to filter by specific container or list all
+if [ -n "$TARGET_CONTAINER" ] && [ "$SHOW_SUMMARY" = false ]; then
+    PS_CMD="podman ps --filter name=^$TARGET_CONTAINER$ --format '{{.ID}} {{.Names}}'"
+else
+    PS_CMD="podman ps --format '{{.ID}} {{.Names}}'"
 fi
 
 while read -r cid name; do
-    [ -z "$cid" ] && continue
-    
-    is_running=$(podman inspect "$cid" --format '{{.State.Running}}' 2>/dev/null)
-    if [ "$is_running" != "true" ]; then
-        printf "${GRAY}[ ]${NC} %-22s %-12s ${GRAY}Stopped${NC}\n" "$name" "-"
-        ((error_count++))
-        continue
-    fi
+    pid=$(podman inspect "$cid" --format '{{.State.Pid}}' 2>/dev/null)
+    [ -z "$pid" ] || [ "$pid" == "0" ] && continue
+    ((total_running++))
 
-    if ! podman exec "$cid" test -d /proc/net 2>/dev/null; then
-        printf "${YELLOW}[!]${NC} %-22s %-12s ${YELLOW}No network stack${NC}\n" "$name" "-"
-        ((error_count++))
-        continue
-    fi
+    mappings=$(podman inspect "$cid" --format '{{range $p, $conf := .NetworkSettings.Ports}}{{if $conf}}{{range $conf}}{{$p}}:{{.HostPort}} {{end}}{{end}}{{end}}' 2>/dev/null)
+    net_mode=$(podman inspect "$cid" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null)
 
-    network_mode=$(podman inspect "$cid" --format '{{.HostConfig.NetworkMode}}' 2>/dev/null)
-    case "$network_mode" in
-        "host") net_mode="host" ;;
-        "bridge") net_mode="bridge" ;;
-        "none") net_mode="none" ;;
-        "container:"*) net_mode="container" ;;
-        "pasta") net_mode="pasta" ;;
-        "slirp4netns") net_mode="slirp" ;;
-        "") net_mode="default" ;;
-        *) net_mode="${network_mode:0:8}" ;;
-    esac
+    v4_active=$(awk 'NR>1 && $4=="0A" {split($2,a,":"); print a[1] ":" strtonum("0x"a[2])}' "/proc/$pid/net/tcp" 2>/dev/null | sort -u)
+    v6_active=$(awk 'NR>1 && $4=="0A" {split($2,a,":"); print a[1] ":" strtonum("0x"a[2])}' "/proc/$pid/net/tcp6" 2>/dev/null | sort -u)
 
-    published_full=$(podman inspect "$cid" --format '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}}->{{(index $conf 0).HostPort}} {{end}}' 2>/dev/null | sed 's/ *$//')
-    if [ -n "$published_full" ]; then
-        pub_count=$(echo "$published_full" | tr ' ' '\n' | wc -l)
-        if [ $pub_count -gt 3 ]; then
-            pub_display=" ($pub_count ports published)"
-        else
-            pub_display=" ($published_full)"
-        fi
-    else
-        pub_display=""
-    fi
+    has_v4=false; has_v6=false; port_string=""
 
-    ipv6_tcp=$(podman exec "$cid" cat /proc/net/tcp6 2>/dev/null | awk '
-        NR>1 && $4 == "0A" {
-            split($2, addr, ":");
-            print addr[1] ":" addr[2];
-        }
-    ')
-
-    ipv4_tcp=$(podman exec "$cid" cat /proc/net/tcp 2>/dev/null | awk '
-        NR>1 && $4 == "0A" {
-            split($2, addr, ":");
-            print addr[1] ":" addr[2];
-        }
-    ')
-
-    ipv6_udp=$(podman exec "$cid" cat /proc/net/udp6 2>/dev/null | awk '
-        NR>1 && $4 == "0A" {
-            split($2, addr, ":");
-            print addr[1] ":" addr[2];
-        }
-    ')
-
-    ipv4_udp=$(podman exec "$cid" cat /proc/net/udp 2>/dev/null | awk '
-        NR>1 && $4 == "0A" {
-            split($2, addr, ":");
-            print addr[1] ":" addr[2];
-        }
-    ')
-
-    has_v4=false
-    has_v6=false
-    
-    listener_ports=""
-    
-    if [ -n "$ipv4_tcp" ]; then
-        while IFS=':' read -r ip_hex port_hex; do
-            port=$(hex_to_dec "$port_hex")
-            if [ "$port" -ne 0 ]; then
-                has_v4=true
-                if [ "$ip_hex" = "00000000" ]; then
-                    listener_ports="${listener_ports}0.0.0.0:${port} "
-                elif [ "$ip_hex" = "0100007F" ] || [ "$ip_hex" = "7F000001" ]; then
-                    listener_ports="${listener_ports}127.0.0.1:${port} "
-                else
-                    ip_dec=$(hex_ip_to_dec "$ip_hex")
-                    listener_ports="${listener_ports}${ip_dec}:${port} "
-                fi
-            fi
-        done <<< "$ipv4_tcp"
-    fi
-    
-    if [ -n "$ipv6_tcp" ]; then
-        while IFS=':' read -r ip_hex port_hex; do
-            port=$(hex_to_dec "$port_hex")
-            if [ "$port" -ne 0 ]; then
-                has_v6=true
-                if [ "$ip_hex" = "00000000000000000000000000000000" ]; then
-                    listener_ports="${listener_ports}:::${port} "
-                else
-                    # Just show a shortened IPv6 address
-                    listener_ports="${listener_ports}[${ip_hex:0:8}]:${port} "
-                fi
-            fi
-        done <<< "$ipv6_tcp"
-    fi
-    
-    if [ "$has_v4" = false ] && [ -n "$ipv4_udp" ]; then
-        while IFS=':' read -r ip_hex port_hex; do
-            port=$(hex_to_dec "$port_hex")
-            if [ "$port" -ne 0 ]; then
-                has_v4=true
-                if [ "$ip_hex" = "00000000" ]; then
-                    listener_ports="${listener_ports}UDP 0.0.0.0:${port} "
-                else
-                    listener_ports="${listener_ports}UDP ${port} "
-                fi
-                break # Just show first UDP port to keep it clean
-            fi
-        done <<< "$ipv4_udp"
-    fi
-    
-    if [ "$has_v6" = false ] && [ -n "$ipv6_udp" ]; then
-        while IFS=':' read -r ip_hex port_hex; do
-            port=$(hex_to_dec "$port_hex")
-            if [ "$port" -ne 0 ]; then
-                has_v6=true
-                listener_ports="${listener_ports}UDP :::${port} "
-                break
-            fi
-        done <<< "$ipv6_udp"
-    fi
-    
-    listener_display=$(echo "$listener_ports" | sed 's/ *$//')
-    if [ -z "$listener_display" ]; then
-        listener_display="No listeners"
-    fi
-    
-    full_display="${listener_display}${pub_display}"
-    
-    status=""
-    color=""
-    if [ "$has_v4" = true ] && [ "$has_v6" = true ]; then
-        status="D"
-        color="$PURPLE"
-        ((dual_count++))
-    elif [ "$has_v6" = true ]; then
-        status="6"
-        color="$GREEN"
-        ((v6_count++))
-    elif [ "$has_v4" = true ]; then
-        status="4"
-        color="$BLUE"
-        ((v4_count++))
-    else
-        status="✗"
-        color="$RED"
-        ((none_count++))
-    fi
-    
-    if [ ${#full_display} -le 50 ]; then
-        printf "${color}[${status}]${NC} %-22s %-12s %s\n" "$name" "$net_mode" "$full_display"
-    else
-        first_part="${full_display:0:50}"
-        rest="${full_display:50}"
+    for entry in $v4_active $v6_active; do
+        ip_hex=${entry%%:*}; port=${entry#*:}
+        [ "$ip_hex" == "00000000" ] && has_v4=true
+        [ "$ip_hex" == "00000000000000000000000000000000" ] && has_v6=true
         
-        if [[ "$first_part" =~ .*\ (.*)$ ]] && [ ${#first_part} -gt 20 ]; then
-            break_pos=$(expr length "$first_part" - length "${BASH_REMATCH[1]}" - 1)
-            first_part="${full_display:0:$break_pos}"
-            rest="${full_display:$break_pos}"
-            rest=$(echo "$rest" | sed 's/^ //')
-        fi
-        
-        printf "${color}[${status}]${NC} %-22s %-12s %s\n" "$name" "$net_mode" "$first_part"
-        
-        indent="   $(printf '%*s' 22 '') $(printf '%*s' 12 '') "
-        while [ -n "$rest" ]; do
-            if [ ${#rest} -le 50 ]; then
-                echo -e "$indent$rest"
-                break
-            else
-                chunk="${rest:0:50}"
-                if [[ "$chunk" =~ .*\ (.*)$ ]] && [ ${#chunk} -gt 20 ]; then
-                    break_pos=$(expr length "$chunk" - length "${BASH_REMATCH[1]}" - 1)
-                    chunk="${rest:0:$break_pos}"
-                    rest="${rest:$break_pos}"
-                    rest=$(echo "$rest" | sed 's/^ //')
-                else
-                    rest="${rest:50}"
-                fi
-                echo -e "$indent$chunk"
-            fi
-        done
-    fi
-done <<< "$containers"
+        mapped_port=$(echo "$mappings" | grep -oE "$port/[a-z]+:[0-9]+" | cut -d: -f2 | head -n1)
+        label="$(decode_ip "$ip_hex"):$port"
+        [ -n "$mapped_port" ] && label="$label(${port}/tcp->${mapped_port})"
+        port_string+="$label "
+    done
 
-if [ "$SHOW_SUMMARY" = true ]; then
-    echo -e "\n${PURPLE}=== Summary ===${NC}"
-    echo -e "Dual-Stack:  ${PURPLE}$dual_count${NC}"
-    echo -e "IPv6-Only:   ${GREEN}$v6_count${NC}"
-    echo -e "IPv4-Only:   ${BLUE}$v4_count${NC}"
-    echo -e "No Listeners: ${RED}$none_count${NC}"
-    echo -e "Errors:      ${YELLOW}$error_count${NC}"
-    
-    total=$((dual_count + v6_count + v4_count + none_count + error_count))
-    if [ $total -gt 0 ]; then
-        v6_percent=$(( (dual_count + v6_count) * 100 / total ))
-        echo -e "\nIPv6 Capable: ${CYAN}${v6_percent}%${NC} of running containers"
-        
-        if [ $dual_count -eq 0 ] && [ $v6_count -eq 0 ] && [ $v4_count -gt 0 ]; then
-            echo -e "${YELLOW} No IPv6 listeners detected - consider IPv6 readiness${NC}"
-        fi
+    if [ "$has_v4" = true ] && [ "$has_v6" = true ]; then status="D"; color="$PURPLE"; ((dual_count++))
+    elif [ "$has_v6" = true ]; then status="6"; color="$GREEN"; ((v6_count++))
+    elif [ "$has_v4" = true ]; then status="4"; color="$BLUE"; ((v4_count++))
+    else status="✗"; color="$RED"; ((none_count++)); port_string="No listeners"; fi
+
+    if [ "$SHOW_SUMMARY" = false ]; then
+        header=$(printf "${color}[${status}]${NC} %-22s %-12s " "$name" "$net_mode")
+        echo "$port_string" | fold -s -w 42 | awk -v h="$header" 'NR==1 {print h $0} NR>1 {print "                                      " $0}'
     fi
+done <<< "$(eval $PS_CMD)"
+
+if [ "$total_running" -gt 0 ] && [ "$SHOW_SUMMARY" = true ]; then
+    capable=$((dual_count + v6_count))
+    percent=$(( (capable * 100) / total_running ))
+    echo -e "\n=== Summary ==="
+    echo "Dual-Stack:   $dual_count"
+    echo "IPv6-Only:    $v6_count"
+    echo "IPv4-Only:    $v4_count"
+    echo "No Listeners: $none_count"
+    echo -e "\nIPv6 Capable: $percent% of running containers"
 fi
