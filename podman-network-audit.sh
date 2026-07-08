@@ -307,7 +307,7 @@ if [ "$SHOW_SUMMARY" = true ]; then
         echo -e "\nIPv6 Capable: ${CYAN}${v6_percent}%${NC} of running containers"
         
         if [ $dual_count -eq 0 ] && [ $v6_count -eq 0 ] && [ $v4_count -gt 0 ]; then
-            echo -e "${YELLOW}⚠️  No IPv6 listeners detected - consider IPv6 readiness${NC}"
+            echo -e "${YELLOW} No IPv6 listeners detected - consider IPv6 readiness${NC}"
         fi
     fi
 fi
