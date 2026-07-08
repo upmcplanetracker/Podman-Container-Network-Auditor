@@ -68,7 +68,8 @@ while read -r cid name; do
     fi
 done <<< "$(eval $PS_CMD)"
 
-if [ "$total_running" -gt 0 ] && [ "$SHOW_SUMMARY" = true ]; then
+# Summary is now printed whenever there is at least one running container
+if [ "$total_running" -gt 0 ]; then
     capable=$((dual_count + v6_count))
     percent=$(( (capable * 100) / total_running ))
     echo -e "\n=== Summary ==="
