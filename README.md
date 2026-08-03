@@ -68,31 +68,31 @@ The script requires standard Linux tools (awk, sed, printf) - available on almos
 ### Installation
 
     # Download the script
-    wget https://github.com/upmcplanetracker/Podman-Container-Network-Auditor/blob/main/podman-network-audit.sh
+    wget https://github.com/upmcplanetracker/Podman-Container-Network-Auditor/blob/main/podman-network-audit
     
     # Make it executable
-    chmod +x podman-network-audit.sh
+    chmod +x podman-network-audit
     
     # Optional: move to a directory in your PATH
-    sudo mv podman-network-audit.sh /usr/local/bin/
+    sudo mv podman-network-audit /usr/local/bin/
     
 
 ### Basic Usage
 
     # Audit all running containers (rootless)
-    ./podman-network-audit.sh
+    ./podman-network-audit
     
     # Audit rootful containers
-    sudo ./podman-network-audit.sh
+    sudo ./podman-network-audit
     
     # Show summary statistics
-    ./podman-network-audit.sh --summary
+    ./podman-network-audit --summary
     
     # Filter by container name
-    ./podman-network-audit.sh nginx
+    ./podman-network-audit nginx
     
     # Filter with summary
-    ./podman-network-audit.sh nginx --summary
+    ./podman-network-audit nginx --summary
     
 * * *
 
@@ -191,19 +191,19 @@ Tips & Tricks
 ### Quick IPv6 Readiness Check
 
     # Check how many containers support IPv6
-    ./podman-network-audit.sh --summary | grep "IPv6 Capable"
+    ./podman-network-audit --summary | grep "IPv6 Capable"
     
 
 ### Monitor Specific Container
 
     # Watch a container's network status
-    watch -n 5 './podman-network-audit.sh my-container'
+    watch -n 5 './podman-network-audit my-container'
     
 
 ### Export for Reporting
 
     # Save output without colors
-    ./podman-network-audit.sh | sed 's/\x1b\[[0-9;]*m//g' > audit-report.txt
+    ./podman-network-audit | sed 's/\x1b\[[0-9;]*m//g' > audit-report.txt
 
 * * *
 
@@ -241,17 +241,3 @@ Contributions are welcome! Please submit issues and pull requests on GitHub.
 *   The script aims to be POSIX-compliant
 *   New features should maintain zero external dependencies
 *   Test both rootless and rootful modes
-
-* * *
-
-License
--------
-
-This project is licensed under the GNU General Public License v3.0 - see the LICENSE file for details.
-
-* * *
-
-Author
-------
-
-Maintained by the community. For questions, suggestions, or improvements, please open an issue or submit a pull request.
